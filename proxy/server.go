@@ -1,11 +1,12 @@
 package main
 
 import (
+	"encoding/binary"
+	"errors"
 	"io"
 	"io/ioutil"
 	"net"
 	"os"
-	"sync"
 
 	"log"
 	"golang.org/x/crypto/ssh"
@@ -63,13 +64,14 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		defer sshConn.Close()
 
 		log.Println("Connection from", sshConn.RemoteAddr())
 		go func() {
 			for chanReq := range newChans {
 				go handleChanReq(chanReq)
 			}
+			log.Println("End of connection")
+			sshConn.Close()
 		}()
 	}
 }
@@ -104,47 +106,46 @@ func handleExec(ch ssh.Channel, req *ssh.Request) {
 	if err != nil {
 		ch.Write([]byte("fail to connect upstream: " + err.Error() + "\r\n"))
 		ch.Close()
+		return
 	}
 
-	pipe(ch, client, session, command)
+	exitStatus, err := pipe(ch, client, session, command)
+	if err != nil {
+		ch.Write([]byte("fail to pipe command:" + err.Error()))
+		ch.Close()
+		return
+	}
+
+	exitStatusBuffer := make([]byte, 4)
+	binary.PutUvarint(exitStatusBuffer, uint64(exitStatus))
+	log.Println("forward exit-code", exitStatus, "to client")
+	_, err = ch.SendRequest("exit-status", false, exitStatusBuffer)
+	if err != nil {
+		log.Println("Failed to forward exit-status to client:", err)
+	}
+
+	ch.Close()
 	client.Close()
-	log.Println("End of connection")
+	log.Println("End of exec")
 }
 
-func pipe(ch ssh.Channel, client *ssh.Client, session *ssh.Session, command string) {
+func pipe(ch ssh.Channel, client *ssh.Client, session *ssh.Session, command string) (int, error) {
 	targetStderr, err := session.StderrPipe()
 	if err != nil {
-		log.Fatalln("fail to pipe stderr", err)
+		return -1, errors.New("fail to pipe stderr: " + err.Error())
 	}
 	targetStdout, err := session.StdoutPipe()
 	if err != nil {
-		log.Fatalln("fail to pipe stdout", err)
+		return -1, errors.New("fail to pipe stdout: " + err.Error())
 	}
 	targetStdin, err := session.StdinPipe()
 	if err != nil {
-		log.Fatalln("fail to pipe stdin", err)
+		return -1, errors.New("fail to pipe stdin: " + err.Error())
 	}
 
-	wg := &sync.WaitGroup{}
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		io.Copy(targetStdin, ch)
-		ch.Close()
-	}()
-
-	go func() {
-		defer wg.Done()
-		io.Copy(ch.Stderr(), targetStderr)
-	}()
-
-	go func() {
-		defer wg.Done()
-		io.Copy(ch, targetStdout)
-		session.Close()
-		ch.Close()
-	}()
+	go io.Copy(targetStdin, ch)
+	go io.Copy(ch.Stderr(), targetStderr)
+	go io.Copy(ch, targetStdout)
 
 	err = session.Start(command)
 	if err != nil {
@@ -152,5 +153,14 @@ func pipe(ch ssh.Channel, client *ssh.Client, session *ssh.Session, command stri
 		ch.Close()
 	}
 
-	wg.Wait()
+	err = session.Wait()
+	if err != nil {
+		if err, ok := err.(*ssh.ExitError); ok {
+			return err.ExitStatus(), nil
+		} else {
+			return -1, errors.New("failed to wait ssh command: " + err.Error())
+		}
+	}
+
+	return 0, nil
 }
