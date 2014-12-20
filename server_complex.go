@@ -131,7 +131,6 @@ func handleChannels(chans <-chan ssh.NewChannel) {
 			continue
 		}
 
-		os.Setenv("TERM", "xterm")
 		var shell string
 		shell = os.Getenv("SHELL")
 		if shell == "" {
@@ -170,6 +169,7 @@ func handleChannels(chans <-chan ssh.NewChannel) {
 					}()
 				case "shell":
 					cmd := exec.Command(shell)
+					cmd.Env = []string{"TERM=xterm"}
 					err := PtyRun(cmd, tty)
 					if err != nil {
 						log.Printf("%s", err)
