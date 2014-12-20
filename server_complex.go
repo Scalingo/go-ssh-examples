@@ -131,6 +131,7 @@ func handleChannels(chans <-chan ssh.NewChannel) {
 			continue
 		}
 
+		os.Setenv("TERM", "xterm")
 		var shell string
 		shell = os.Getenv("SHELL")
 		if shell == "" {
