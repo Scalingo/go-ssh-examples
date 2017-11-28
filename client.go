@@ -34,6 +34,7 @@ func connectToHost(user, host string) (*ssh.Client, *ssh.Session, error) {
 		User: user,
 		Auth: []ssh.AuthMethod{ssh.Password(pass)},
 	}
+	sshConfig.HostKeyCallback = ssh.InsecureIgnoreHostKey()
 
 	client, err := ssh.Dial("tcp", host, sshConfig)
 	if err != nil {
