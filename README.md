@@ -1,3 +1,6 @@
+# /!\ This repository is unmaintained
+
+
 # SSH Client/Server example with Go
 
 ## Initialization
